@@ -10,7 +10,7 @@
 <style>
   :root { --ui: rgba(255,255,255,0.85); }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { width:100%; height:100%; overflow:hidden; background:#8fc7ef; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#8fc7ef; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; touch-action:none; overscroll-behavior:none; }
   #scene { position:fixed; inset:0; display:block; touch-action:none; }
 
   /* ---- Start overlay ---- */
@@ -102,7 +102,7 @@ const FOG_COLOR = new THREE.Color(0xc8e6f7);
 scene.fog = new THREE.Fog(FOG_COLOR.getHex(), 28, 95);
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 2000);
-const EYE = 1.7;
+const EYE = 2.6;
 
 /* ---------- Lighting ---------- */
 const hemi = new THREE.HemisphereLight(0xdff1ff, 0x5b8a3a, 0.95);
@@ -229,6 +229,27 @@ const grassMat = new THREE.MeshStandardMaterial({
   map:bladeTex, alphaTest:0.4, transparent:false, side:THREE.DoubleSide,
   roughness:1, metalness:0, color:0x9ad06a
 });
+// Wind sway: bend each blade's tip in a coherent world-space gust on the GPU.
+let grassUniforms = null;
+grassMat.onBeforeCompile = (shader)=>{
+  shader.uniforms.uTime = { value:0 };
+  grassUniforms = shader.uniforms;
+  shader.vertexShader = 'uniform float uTime;\n' + shader.vertexShader;
+  shader.vertexShader = shader.vertexShader.replace('#include <project_vertex>', `
+    vec4 mvPosition = vec4( transformed, 1.0 );
+    #ifdef USE_INSTANCING
+      mvPosition = instanceMatrix * mvPosition;
+    #endif
+    float bladeH = max(position.y, 0.0);
+    float bend = bladeH * bladeH * 1.7;            // only the tip moves
+    float ph = mvPosition.x * 0.35 + mvPosition.z * 0.35;
+    float gust = sin(uTime * 1.4 + ph) + 0.4 * sin(uTime * 3.3 + ph * 2.3);
+    mvPosition.x += gust * bend * 0.55;
+    mvPosition.z += cos(uTime * 1.1 + ph * 0.8) * bend * 0.30;
+    mvPosition = modelViewMatrix * mvPosition;
+    gl_Position = projectionMatrix * mvPosition;
+  `);
+};
 const GRASS_SPACING = 0.85;
 const GRASS_HALF = 34;                       // half-width of grass field (world units)
 const GRASS_DIM = Math.floor((GRASS_HALF*2)/GRASS_SPACING);
@@ -330,39 +351,6 @@ const stick=document.getElementById('stick');
 const nub=stick.querySelector('.nub');
 let stickId=null, stickCX=0, stickCY=0;
 
-function onPointerDown(e){
-  for(const t of e.changedTouches ? e.changedTouches : [e]){
-    const id = t.identifier ?? 'mouse';
-    const x = t.clientX, y = t.clientY;
-    const r = stick.getBoundingClientRect();
-    if (stickId===null && x>=r.left-20 && x<=r.right+20 && y>=r.top-20 && y<=r.bottom+20){
-      stickId=id; stickCX=r.left+r.width/2; stickCY=r.top+r.height/2;
-      updateStick(x,y);
-    } else if (lookId===null){
-      lookId=id; lastLX=x; lastLY=y;
-    }
-  }
-}
-function onPointerMove(e){
-  for(const t of e.changedTouches ? e.changedTouches : [e]){
-    const id = t.identifier ?? 'mouse';
-    const x=t.clientX, y=t.clientY;
-    if(id===stickId){ updateStick(x,y); }
-    else if(id===lookId){
-      yaw   -= (x-lastLX)*0.0045;
-      pitch -= (y-lastLY)*0.0045;
-      pitch = THREE.MathUtils.clamp(pitch, -1.2, 1.0);
-      lastLX=x; lastLY=y;
-    }
-  }
-}
-function onPointerUp(e){
-  for(const t of e.changedTouches ? e.changedTouches : [e]){
-    const id = t.identifier ?? 'mouse';
-    if(id===stickId){ stickId=null; move.x=0; move.y=0; nub.style.transform='translate(0,0)'; }
-    if(id===lookId){ lookId=null; }
-  }
-}
 function updateStick(x,y){
   let dx=x-stickCX, dy=y-stickCY;
   const max=52, len=Math.hypot(dx,dy);
@@ -370,16 +358,40 @@ function updateStick(x,y){
   nub.style.transform=`translate(${dx}px,${dy}px)`;
   move.x = dx/max; move.y = dy/max;
 }
-canvas.addEventListener('touchstart', e=>{e.preventDefault(); onPointerDown(e);}, {passive:false});
-canvas.addEventListener('touchmove',  e=>{e.preventDefault(); onPointerMove(e);}, {passive:false});
-canvas.addEventListener('touchend',   e=>{e.preventDefault(); onPointerUp(e);}, {passive:false});
-canvas.addEventListener('touchcancel',e=>{onPointerUp(e);}, {passive:false});
-stick.addEventListener('touchstart', e=>{e.preventDefault(); onPointerDown(e);}, {passive:false});
-stick.addEventListener('touchmove',  e=>{e.preventDefault(); onPointerMove(e);}, {passive:false});
-// desktop mouse
-canvas.addEventListener('mousedown', e=>{ lookId='mouse'; lastLX=e.clientX; lastLY=e.clientY; });
-window.addEventListener('mousemove', e=>{ if(lookId==='mouse'){ yaw-=(e.clientX-lastLX)*0.0035; pitch=THREE.MathUtils.clamp(pitch-(e.clientY-lastLY)*0.0035,-1.2,1.0); lastLX=e.clientX; lastLY=e.clientY; } });
-window.addEventListener('mouseup', ()=>{ if(lookId==='mouse') lookId=null; });
+function inStick(x,y){
+  const r=stick.getBoundingClientRect();
+  return x>=r.left-24 && x<=r.right+24 && y>=r.top-24 && y<=r.bottom+24;
+}
+// Unified Pointer Events: every finger/mouse has its own id, so the move
+// stick and the look drag are fully independent and never block each other.
+window.addEventListener('pointerdown', e=>{
+  if(!started) return;
+  if(e.target===soundBtn) return;                 // let the sound toggle handle its own tap
+  if(stickId===null && inStick(e.clientX,e.clientY)){
+    stickId = e.pointerId;
+    const r=stick.getBoundingClientRect();
+    stickCX=r.left+r.width/2; stickCY=r.top+r.height/2;
+    updateStick(e.clientX, e.clientY);
+  } else if(lookId===null){
+    lookId = e.pointerId; lastLX=e.clientX; lastLY=e.clientY;
+  }
+});
+window.addEventListener('pointermove', e=>{
+  if(e.pointerId===stickId){
+    updateStick(e.clientX, e.clientY);
+  } else if(e.pointerId===lookId){
+    yaw   -= (e.clientX-lastLX)*0.0045;
+    pitch -= (e.clientY-lastLY)*0.0045;
+    pitch  = THREE.MathUtils.clamp(pitch, -1.2, 1.0);
+    lastLX=e.clientX; lastLY=e.clientY;
+  }
+});
+function endPointer(e){
+  if(e.pointerId===stickId){ stickId=null; move.x=0; move.y=0; nub.style.transform='translate(0,0)'; }
+  if(e.pointerId===lookId){ lookId=null; }
+}
+window.addEventListener('pointerup', endPointer);
+window.addEventListener('pointercancel', endPointer);
 window.addEventListener('keydown', e=>keys[e.code]=true);
 window.addEventListener('keyup',   e=>keys[e.code]=false);
 
@@ -470,6 +482,7 @@ function animate(){
   requestAnimationFrame(animate);
   const dt=Math.min(clock.getDelta(), 0.05);
   const t=clock.elapsedTime;
+  if(grassUniforms) grassUniforms.uTime.value = t;
 
   // movement (joystick + WASD)
   let mx=move.x, mz=move.y;
