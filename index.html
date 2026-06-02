@@ -99,7 +99,7 @@ const scene = new THREE.Scene();
 const SKY_TOP = new THREE.Color(0x3f8fe0);
 const SKY_HORIZON = new THREE.Color(0xcfeaff);
 const FOG_COLOR = new THREE.Color(0xc8e6f7);
-scene.fog = new THREE.Fog(FOG_COLOR.getHex(), 28, 95);
+scene.fog = new THREE.Fog(FOG_COLOR.getHex(), 30, 108);
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 2000);
 const EYE = 2.6;
@@ -336,6 +336,102 @@ for(let i=0;i<26;i++){
 }
 
 /* ============================================================
+   A very long white picket fence — one section, instanced and
+   recycled along Z so it always stretches to the horizon both
+   ways. It follows the rolling ground, leading toward the house.
+   ============================================================ */
+const FENCE_SEG = 2.2;            // length of one section (world units, along Z)
+const FENCE_X = -3.5;             // world X of the fence line
+const FENCE_SECTIONS = 96;        // ~210 m drawn at once; recycled = endless
+
+function buildFenceSection(){
+  const parts = [];
+  const rail = new THREE.BoxGeometry(0.08, 0.11, FENCE_SEG);
+  const r1 = rail.clone(); r1.translate(0, 0.55, 0);
+  const r2 = rail.clone(); r2.translate(0, 0.95, 0);
+  parts.push(r1, r2);
+  const n = Math.max(2, Math.round(FENCE_SEG/0.34));
+  for(let i=0;i<n;i++){
+    const z = -FENCE_SEG/2 + (i+0.5)*(FENCE_SEG/n);
+    const slat = new THREE.BoxGeometry(0.10, 1.1, 0.045);
+    slat.translate(0, 0.55, z);
+    const tip = new THREE.ConeGeometry(0.085, 0.18, 4);   // pointed picket top
+    tip.rotateY(Math.PI/4); tip.translate(0, 1.19, z);
+    parts.push(slat, tip);
+  }
+  const g = mergeGeoms(parts);
+  g.computeVertexNormals();
+  return g;
+}
+const fenceMat = new THREE.MeshStandardMaterial({ color:0xeee9dd, roughness:0.85, metalness:0 });
+const fence = new THREE.InstancedMesh(buildFenceSection(), fenceMat, FENCE_SECTIONS);
+fence.frustumCulled = false;
+fence.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(fence);
+let lastFenceCell = Infinity;
+function updateFence(pz){
+  const cell = Math.round(pz/FENCE_SEG);
+  if(cell===lastFenceCell) return;
+  lastFenceCell = cell;
+  const half = Math.floor(FENCE_SECTIONS/2);
+  let i=0;
+  for(let s=-half; s<half; s++){
+    const z = (cell+s)*FENCE_SEG;
+    _p.set(FENCE_X, terrainHeight(FENCE_X, z), z);
+    _q.identity(); _s.set(1,1,1);
+    _m.compose(_p,_q,_s);
+    fence.setMatrixAt(i++, _m);
+  }
+  fence.count = i;
+  fence.instanceMatrix.needsUpdate = true;
+}
+
+/* ============================================================
+   The house on the hill you can never reach. It's pinned at a
+   fixed offset directly ahead of the player every frame, so the
+   distance to it never changes no matter how far you walk. It
+   rides its own grassy mound so it always crowns a hilltop.
+   ============================================================ */
+const HOUSE_DIST = 62;            // metres ahead (north, -Z) — forever
+const house = new THREE.Group();
+const moundR = 20, moundTop = moundR*0.55;
+const mound = new THREE.Mesh(
+  new THREE.SphereGeometry(moundR, 30, 16, 0, Math.PI*2, 0, Math.PI*0.5),
+  new THREE.MeshStandardMaterial({ color:0x6fa84a, roughness:1 })
+);
+mound.scale.y = 0.55;
+house.add(mound);
+
+const wallMat = new THREE.MeshStandardMaterial({ color:0xe9e4d6, roughness:0.9 });
+const body = new THREE.Mesh(new THREE.BoxGeometry(7, 5, 6), wallMat);
+body.position.y = moundTop + 2.5;
+house.add(body);
+const roof = new THREE.Mesh(new THREE.ConeGeometry(5.7, 3.4, 4),
+  new THREE.MeshStandardMaterial({ color:0x7c3a2c, roughness:0.85 }));
+roof.rotation.y = Math.PI/4;
+roof.position.y = moundTop + 5 + 1.7;
+house.add(roof);
+const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.3, 0.8),
+  new THREE.MeshStandardMaterial({ color:0x6a4636, roughness:1 }));
+chimney.position.set(1.9, moundTop + 5.6, 0.6);
+house.add(chimney);
+const door = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.3),
+  new THREE.MeshStandardMaterial({ color:0x37271f, roughness:1, side:THREE.DoubleSide }));
+door.position.set(0, moundTop + 1.15, 3.01);
+house.add(door);
+const winMat = new THREE.MeshStandardMaterial({ color:0xffe6a6, emissive:0xffcc66, emissiveIntensity:0.55, roughness:0.6 });
+for(const x of [-2.1, 2.1]){
+  const w = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), winMat);
+  w.position.set(x, moundTop + 3.2, 3.01);    // faint, eerie lit windows facing the player
+  house.add(w);
+}
+scene.add(house);
+function updateHouse(px, pz){
+  const hx = px, hz = pz - HOUSE_DIST;          // always directly ahead, never closer
+  house.position.set(hx, terrainHeight(hx, hz), hz);
+}
+
+/* ============================================================
    Player + controls (touch joystick + drag-look, and
    keyboard/mouse for desktop testing).
    ============================================================ */
@@ -503,6 +599,8 @@ function animate(){
 
   updateTerrain(player.x, player.z);
   updateGrass(player.x, player.z);
+  updateFence(player.z);
+  updateHouse(player.x, player.z);
 
   // camera follows ground with a gentle walking bob
   const ground=terrainHeight(player.x, player.z);
@@ -537,7 +635,7 @@ function resize(){
 window.addEventListener('resize', resize);
 
 // prime the world so first frame is ready
-updateTerrain(0,0); updateGrass(0,0);
+updateTerrain(0,0); updateGrass(0,0); updateFence(0); updateHouse(0,0);
 animate();
 
 const startEl=document.getElementById('start');
