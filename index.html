@@ -340,9 +340,12 @@ for(let i=0;i<26;i++){
    recycled along Z so it always stretches to the horizon both
    ways. It follows the rolling ground, leading toward the house.
    ============================================================ */
-const FENCE_SEG = 2.2;            // length of one section (world units, along Z)
-const FENCE_X = -3.5;             // world X of the fence line
-const FENCE_SECTIONS = 96;        // ~210 m drawn at once; recycled = endless
+const FENCE_SEG = 2.2;                       // length of one section (along Z)
+const FENCE_HALF = 4.0;                       // half-width of the lane
+const FENCE_XS = [-FENCE_HALF, FENCE_HALF];   // a fence on each side -> a corridor
+const FENCE_SECTIONS = 96;                    // sections per side; recycled = endless
+
+const fenceMat = new THREE.MeshStandardMaterial({ color:0xeee9dd, roughness:0.85, metalness:0 });
 
 function buildFenceSection(){
   const parts = [];
@@ -363,8 +366,27 @@ function buildFenceSection(){
   g.computeVertexNormals();
   return g;
 }
-const fenceMat = new THREE.MeshStandardMaterial({ color:0xeee9dd, roughness:0.85, metalness:0 });
-const fence = new THREE.InstancedMesh(buildFenceSection(), fenceMat, FENCE_SECTIONS);
+// A short picket panel that runs along local +X from a hinge at the origin
+// (used for the swinging gate leaves).
+function buildFencePanel(len){
+  const parts = [];
+  const rail = new THREE.BoxGeometry(len, 0.09, 0.05);
+  const r1 = rail.clone(); r1.translate(len/2, 0.50, 0);
+  const r2 = rail.clone(); r2.translate(len/2, 0.85, 0);
+  parts.push(r1, r2);
+  const n = Math.max(2, Math.round(len/0.28));
+  for(let i=0;i<n;i++){
+    const x = (i+0.5)*(len/n);
+    const slat = new THREE.BoxGeometry(0.06, 1.0, 0.045); slat.translate(x, 0.50, 0);
+    const tip = new THREE.ConeGeometry(0.055, 0.14, 4); tip.rotateY(Math.PI/4); tip.translate(x, 1.04, 0);
+    parts.push(slat, tip);
+  }
+  const g = mergeGeoms(parts);
+  g.computeVertexNormals();
+  return g;
+}
+
+const fence = new THREE.InstancedMesh(buildFenceSection(), fenceMat, FENCE_SECTIONS*FENCE_XS.length);
 fence.frustumCulled = false;
 fence.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 scene.add(fence);
@@ -377,14 +399,39 @@ function updateFence(pz){
   let i=0;
   for(let s=-half; s<half; s++){
     const z = (cell+s)*FENCE_SEG;
-    _p.set(FENCE_X, terrainHeight(FENCE_X, z), z);
-    _q.identity(); _s.set(1,1,1);
-    _m.compose(_p,_q,_s);
-    fence.setMatrixAt(i++, _m);
+    for(const fx of FENCE_XS){
+      _p.set(fx, terrainHeight(fx, z), z);
+      _q.identity(); _s.set(1,1,1);
+      _m.compose(_p,_q,_s);
+      fence.setMatrixAt(i++, _m);
+    }
   }
   fence.count = i;
   fence.instanceMatrix.needsUpdate = true;
 }
+
+// ---- An open gate at the start of the lane (a fixed world landmark) ----
+const GATE_Z = 3.0;
+(function buildGate(){
+  const gate = new THREE.Group();
+  const OA = 1.15;                              // how far the leaves swing open
+  for(const fx of FENCE_XS){                    // two posts, taller than the fence
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.3, 0.28), fenceMat);
+    post.position.set(fx, 1.15, 0);
+    gate.add(post);
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(FENCE_HALF*2 + 0.5, 0.26, 0.26), fenceMat);
+  beam.position.set(0, 2.25, 0);               // lintel across the top
+  gate.add(beam);
+  const leafGeo = buildFencePanel(FENCE_HALF - 0.4);
+  const left = new THREE.Mesh(leafGeo, fenceMat);
+  left.position.set(-FENCE_HALF, 0, 0); left.rotation.y = -OA;            // swings open toward the player
+  const right = new THREE.Mesh(leafGeo, fenceMat);
+  right.position.set(FENCE_HALF, 0, 0); right.rotation.y = Math.PI + OA;  // mirror
+  gate.add(left, right);
+  gate.position.set(0, terrainHeight(0, GATE_Z), GATE_Z);
+  scene.add(gate);
+})();
 
 /* ============================================================
    The house on the hill you can never reach. It's pinned at a
@@ -392,14 +439,15 @@ function updateFence(pz){
    distance to it never changes no matter how far you walk. It
    rides its own grassy mound so it always crowns a hilltop.
    ============================================================ */
-const HOUSE_DIST = 62;            // metres ahead (north, -Z) — forever
+const HOUSE_DIST = 85;            // metres ahead (north, -Z) — forever; far enough to read as distant & hazy
+const GROUND_SINK = 7.5;          // sink the mound into the terrain so its rim never floats
 const house = new THREE.Group();
-const moundR = 20, moundTop = moundR*0.55;
+const moundR = 28, moundTop = moundR*0.40;     // wide, gentle rise
 const mound = new THREE.Mesh(
-  new THREE.SphereGeometry(moundR, 30, 16, 0, Math.PI*2, 0, Math.PI*0.5),
+  new THREE.SphereGeometry(moundR, 32, 16, 0, Math.PI*2, 0, Math.PI*0.5),
   new THREE.MeshStandardMaterial({ color:0x6fa84a, roughness:1 })
 );
-mound.scale.y = 0.55;
+mound.scale.y = 0.40;
 house.add(mound);
 
 const wallMat = new THREE.MeshStandardMaterial({ color:0xe9e4d6, roughness:0.9 });
@@ -428,7 +476,7 @@ for(const x of [-2.1, 2.1]){
 scene.add(house);
 function updateHouse(px, pz){
   const hx = px, hz = pz - HOUSE_DIST;          // always directly ahead, never closer
-  house.position.set(hx, terrainHeight(hx, hz), hz);
+  house.position.set(hx, terrainHeight(hx, hz) - GROUND_SINK, hz);  // sunk so the mound sits in the ground
 }
 
 /* ============================================================
