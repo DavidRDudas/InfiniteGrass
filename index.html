@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#8fc7ef" />
+<title>Endless Hills</title>
+<style>
+  :root { --ui: rgba(255,255,255,0.85); }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#8fc7ef; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  #scene { position:fixed; inset:0; display:block; touch-action:none; }
+
+  /* ---- Start overlay ---- */
+  #start {
+    position:fixed; inset:0; z-index:30;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:linear-gradient(180deg,#bfe0fb 0%, #9ecdf5 45%, #d9eecb 100%);
+    color:#3a4a55; text-align:center; padding:24px; gap:18px;
+    transition:opacity .8s ease;
+  }
+  #start h1 { font-weight:600; font-size:clamp(28px,8vw,52px); letter-spacing:.04em; text-shadow:0 1px 0 rgba(255,255,255,.5); }
+  #start p { font-size:clamp(14px,4vw,18px); max-width:520px; line-height:1.5; opacity:.85; }
+  #start .play {
+    margin-top:8px; padding:16px 44px; border:none; border-radius:999px;
+    background:#5a8f3c; color:#fff; font-size:clamp(16px,4.5vw,20px); font-weight:600;
+    box-shadow:0 8px 24px rgba(60,100,40,.35); cursor:pointer; letter-spacing:.05em;
+  }
+  #start .play:active { transform:translateY(2px); }
+  #start small { opacity:.6; font-size:12px; margin-top:10px; }
+
+  /* ---- HUD / touch controls ---- */
+  #hud { position:fixed; inset:0; z-index:10; pointer-events:none; opacity:0; transition:opacity 1s ease; }
+  #hud.on { opacity:1; }
+
+  /* left joystick */
+  #stick {
+    position:absolute; left:max(24px,env(safe-area-inset-left)); bottom:max(36px,env(safe-area-inset-bottom));
+    width:140px; height:140px; border-radius:50%;
+    background:rgba(255,255,255,0.12); border:2px solid rgba(255,255,255,0.4);
+    pointer-events:auto; touch-action:none;
+  }
+  #stick .nub {
+    position:absolute; left:50%; top:50%; width:62px; height:62px; margin:-31px 0 0 -31px;
+    border-radius:50%; background:rgba(255,255,255,0.7); box-shadow:0 2px 10px rgba(0,0,0,.2);
+  }
+  #hint {
+    position:absolute; right:max(20px,env(safe-area-inset-right)); bottom:max(40px,env(safe-area-inset-bottom));
+    color:var(--ui); font-size:13px; text-align:right; text-shadow:0 1px 3px rgba(0,0,0,.25); max-width:180px;
+  }
+  #sound {
+    position:absolute; top:max(16px,env(safe-area-inset-top)); right:max(16px,env(safe-area-inset-right));
+    width:46px; height:46px; border-radius:50%; pointer-events:auto;
+    background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.45);
+    color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  #fade { position:fixed; inset:0; z-index:20; background:#dff0cf; pointer-events:none; opacity:0; transition:opacity 1.2s ease; }
+</style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="fade"></div>
+
+  <div id="hud">
+    <div id="stick"><div class="nub"></div></div>
+    <div id="hint">Drag anywhere to look around<br>Walk wherever you like</div>
+    <div id="sound" title="Toggle music">♪</div>
+  </div>
+
+  <div id="start">
+    <h1>Endless Hills</h1>
+    <p>Rolling fields of freshly-cut grass under a wide blue sky. No goal, no end — just hills, clouds, and quiet, eerie air. Wander as far as you like.</p>
+    <button class="play" id="playBtn">Step Outside</button>
+    <small>Headphones recommended · Drag to look · Joystick to move</small>
+  </div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.161.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ============================================================
+   Endless Hills — a calm first-person mobile walking sim.
+   Procedural infinite terrain, instanced grass, drifting
+   clouds, and generative eerie ambient music (Web Audio).
+   ============================================================ */
+
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const SKY_TOP = new THREE.Color(0x3f8fe0);
+const SKY_HORIZON = new THREE.Color(0xcfeaff);
+const FOG_COLOR = new THREE.Color(0xc8e6f7);
+scene.fog = new THREE.Fog(FOG_COLOR.getHex(), 28, 95);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 2000);
+const EYE = 1.7;
+
+/* ---------- Lighting ---------- */
+const hemi = new THREE.HemisphereLight(0xdff1ff, 0x5b8a3a, 0.95);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff6e0, 1.1);
+sun.position.set(-60, 80, 40);
+scene.add(sun);
+
+/* ============================================================
+   Procedural height field — gentle rolling hills.
+   Pure function of world (x,z) so the world is deterministic
+   and truly endless.
+   ============================================================ */
+function hash(ix, iz){
+  let n = Math.sin(ix*127.1 + iz*311.7) * 43758.5453;
+  return (n - Math.floor(n));
+}
+function valueNoise(x, z){
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const ux = fx*fx*(3-2*fx), uz = fz*fz*(3-2*fz);
+  const a = hash(ix, iz),     b = hash(ix+1, iz);
+  const c = hash(ix, iz+1),   d = hash(ix+1, iz+1);
+  return a*(1-ux)*(1-uz) + b*ux*(1-uz) + c*(1-ux)*uz + d*ux*uz;
+}
+function terrainHeight(x, z){
+  // Large gentle swells + medium rolls + a touch of fine detail.
+  let h = 0;
+  h += 7.5 * valueNoise(x*0.018, z*0.018);
+  h += 2.6 * valueNoise(x*0.055, z*0.05);
+  h += 0.7 * valueNoise(x*0.16,  z*0.15);
+  return h - 5.0;
+}
+
+/* ============================================================
+   Terrain mesh — a single plane that recenters on the player
+   each frame and re-samples heights, giving an infinite field.
+   ============================================================ */
+const TERRAIN_SIZE = 220;
+const TERRAIN_SEG = 150;
+const terrainGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEG, TERRAIN_SEG);
+terrainGeo.rotateX(-Math.PI/2);
+const terrainMat = new THREE.MeshStandardMaterial({ color:0x6fa84a, roughness:1, metalness:0, flatShading:false });
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+terrain.frustumCulled = false;
+scene.add(terrain);
+
+const tPos = terrainGeo.attributes.position;
+const tColor = new Float32Array(tPos.count * 3);
+terrainGeo.setAttribute('color', new THREE.BufferAttribute(tColor, 3));
+terrainMat.vertexColors = true;
+const grassDark = new THREE.Color(0x4f8a37);
+const grassLight = new THREE.Color(0x86bd5a);
+
+function updateTerrain(px, pz){
+  // snap to vertex spacing to avoid swimming
+  const step = TERRAIN_SIZE / TERRAIN_SEG;
+  const ox = Math.round(px/step)*step;
+  const oz = Math.round(pz/step)*step;
+  terrain.position.set(ox, 0, oz);
+  for (let i=0; i<tPos.count; i++){
+    const lx = tPos.getX(i), lz = tPos.getZ(i);
+    const h = terrainHeight(lx+ox, lz+oz);
+    tPos.setY(i, h);
+    // shade by height for a mown, sunlit feel
+    const t = THREE.MathUtils.clamp((h+5)/12, 0, 1);
+    const c = grassDark.clone().lerp(grassLight, t*0.7 + 0.15);
+    tColor[i*3]=c.r; tColor[i*3+1]=c.g; tColor[i*3+2]=c.b;
+  }
+  tPos.needsUpdate = true;
+  terrainGeo.attributes.color.needsUpdate = true;
+  terrainGeo.computeVertexNormals();
+}
+
+/* ============================================================
+   Grass — instanced crossed quads laid on a world lattice so
+   blades hold their position as the field scrolls (no popping).
+   ============================================================ */
+function makeBladeTexture(){
+  const c = document.createElement('canvas'); c.width=c.height=64;
+  const g = c.getContext('2d');
+  g.clearRect(0,0,64,64);
+  for (let i=0;i<5;i++){
+    const x = 14 + i*9 + (Math.random()*4-2);
+    g.beginPath();
+    g.moveTo(x, 64);
+    g.quadraticCurveTo(x + (Math.random()*10-5), 30, x + (Math.random()*6-3), 4);
+    g.lineWidth = 3.5;
+    const shade = 120 + Math.floor(Math.random()*70);
+    g.strokeStyle = `rgb(${shade-50},${shade+30},${shade-40})`;
+    g.lineCap = 'round';
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const bladeTex = makeBladeTexture();
+const quad = new THREE.PlaneGeometry(0.9, 0.55);
+quad.translate(0, 0.275, 0);
+const quad2 = quad.clone(); quad2.rotateY(Math.PI/2);
+// merge two crossed quads
+const bladeGeo = mergeGeoms([quad, quad2]);
+function mergeGeoms(geos){
+  let vc=0, ic=0;
+  geos.forEach(g=>{ vc+=g.attributes.position.count; ic+=g.index.count; });
+  const pos=new Float32Array(vc*3), uv=new Float32Array(vc*2), idx=new Uint16Array(ic);
+  let vo=0, io=0, base=0;
+  geos.forEach(g=>{
+    pos.set(g.attributes.position.array, vo*3);
+    uv.set(g.attributes.uv.array, vo*2);
+    const gi=g.index.array;
+    for(let i=0;i<gi.length;i++) idx[io+i]=gi[i]+base;
+    base+=g.attributes.position.count; vo+=g.attributes.position.count; io+=gi.length;
+  });
+  const m=new THREE.BufferGeometry();
+  m.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  m.setAttribute('uv',new THREE.BufferAttribute(uv,2));
+  m.setIndex(new THREE.BufferAttribute(idx,1));
+  return m;
+}
+
+const grassMat = new THREE.MeshStandardMaterial({
+  map:bladeTex, alphaTest:0.4, transparent:false, side:THREE.DoubleSide,
+  roughness:1, metalness:0, color:0x9ad06a
+});
+const GRASS_SPACING = 0.85;
+const GRASS_HALF = 34;                       // half-width of grass field (world units)
+const GRASS_DIM = Math.floor((GRASS_HALF*2)/GRASS_SPACING);
+const GRASS_COUNT = GRASS_DIM*GRASS_DIM;
+const grass = new THREE.InstancedMesh(bladeGeo, grassMat, GRASS_COUNT);
+grass.frustumCulled = false;
+grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(grass);
+
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(),
+      _p = new THREE.Vector3(), _s = new THREE.Vector3(), _e = new THREE.Euler();
+let lastGrassCellX = Infinity, lastGrassCellZ = Infinity;
+
+function updateGrass(px, pz){
+  const cellX = Math.round(px/GRASS_SPACING);
+  const cellZ = Math.round(pz/GRASS_SPACING);
+  if (cellX===lastGrassCellX && cellZ===lastGrassCellZ) return;
+  lastGrassCellX=cellX; lastGrassCellZ=cellZ;
+  let i=0;
+  const half = Math.floor(GRASS_DIM/2);
+  for (let gx=-half; gx<half; gx++){
+    for (let gz=-half; gz<half; gz++){
+      const lxi = cellX+gx, lzi = cellZ+gz;
+      const jx = (hash(lxi*1.3, lzi*7.7)-0.5)*GRASS_SPACING;
+      const jz = (hash(lxi*5.1, lzi*2.9)-0.5)*GRASS_SPACING;
+      const wx = lxi*GRASS_SPACING + jx;
+      const wz = lzi*GRASS_SPACING + jz;
+      const h = terrainHeight(wx, wz);
+      const sc = 0.6 + hash(lxi*9.2, lzi*4.4)*0.8;
+      _p.set(wx, h, wz);
+      _e.set(0, hash(lxi*3.7, lzi*8.1)*Math.PI*2, 0);
+      _q.setFromEuler(_e);
+      _s.set(sc, sc, sc);
+      _m.compose(_p,_q,_s);
+      grass.setMatrixAt(i++, _m);
+    }
+  }
+  grass.count = i;
+  grass.instanceMatrix.needsUpdate = true;
+}
+
+/* ============================================================
+   Sky dome (vertical gradient) + drifting fluffy clouds.
+   ============================================================ */
+const skyGeo = new THREE.SphereGeometry(1000, 32, 16);
+const skyMat = new THREE.ShaderMaterial({
+  side:THREE.BackSide, depthWrite:false,
+  uniforms:{ top:{value:SKY_TOP}, horizon:{value:SKY_HORIZON} },
+  vertexShader:`varying vec3 vN; void main(){ vN=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+  fragmentShader:`varying vec3 vN; uniform vec3 top; uniform vec3 horizon;
+    void main(){ float t=clamp(vN.y*1.1,0.0,1.0); t=pow(t,0.6); gl_FragColor=vec4(mix(horizon,top,t),1.0);}`
+});
+const sky = new THREE.Mesh(skyGeo, skyMat);
+sky.frustumCulled=false;
+scene.add(sky);
+
+function makeCloudTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=256;
+  const g=c.getContext('2d');
+  g.clearRect(0,0,256,256);
+  const cx=128, cy=140;
+  for(let i=0;i<22;i++){
+    const a=Math.random()*Math.PI*2, r=Math.random()*70;
+    const x=cx+Math.cos(a)*r, y=cy+Math.sin(a)*r*0.5 - 10;
+    const rad=34+Math.random()*46;
+    const grd=g.createRadialGradient(x,y,0,x,y,rad);
+    grd.addColorStop(0,'rgba(255,255,255,0.95)');
+    grd.addColorStop(0.6,'rgba(255,255,255,0.5)');
+    grd.addColorStop(1,'rgba(255,255,255,0)');
+    g.fillStyle=grd; g.beginPath(); g.arc(x,y,rad,0,Math.PI*2); g.fill();
+  }
+  const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace; return tex;
+}
+const cloudTex=makeCloudTexture();
+const clouds=[];
+const cloudMat=new THREE.MeshBasicMaterial({map:cloudTex, transparent:true, depthWrite:false, opacity:0.9, fog:false});
+for(let i=0;i<26;i++){
+  const sz=60+Math.random()*120;
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(sz, sz*0.6), cloudMat);
+  m.position.set((Math.random()-0.5)*900, 130+Math.random()*90, (Math.random()-0.5)*900);
+  m.userData.drift = 1.5+Math.random()*2.5;
+  m.userData.bob = Math.random()*Math.PI*2;
+  clouds.push(m); scene.add(m);
+}
+
+/* ============================================================
+   Player + controls (touch joystick + drag-look, and
+   keyboard/mouse for desktop testing).
+   ============================================================ */
+const player = new THREE.Vector3(0, 0, 0);
+let yaw = 0, pitch = -0.05;
+const move = { x:0, y:0 };           // joystick vector, -1..1
+const keys = {};
+const SPEED = 7.5;
+
+/* drag-look */
+let lookId=null, lastLX=0, lastLY=0;
+const stick=document.getElementById('stick');
+const nub=stick.querySelector('.nub');
+let stickId=null, stickCX=0, stickCY=0;
+
+function onPointerDown(e){
+  for(const t of e.changedTouches ? e.changedTouches : [e]){
+    const id = t.identifier ?? 'mouse';
+    const x = t.clientX, y = t.clientY;
+    const r = stick.getBoundingClientRect();
+    if (stickId===null && x>=r.left-20 && x<=r.right+20 && y>=r.top-20 && y<=r.bottom+20){
+      stickId=id; stickCX=r.left+r.width/2; stickCY=r.top+r.height/2;
+      updateStick(x,y);
+    } else if (lookId===null){
+      lookId=id; lastLX=x; lastLY=y;
+    }
+  }
+}
+function onPointerMove(e){
+  for(const t of e.changedTouches ? e.changedTouches : [e]){
+    const id = t.identifier ?? 'mouse';
+    const x=t.clientX, y=t.clientY;
+    if(id===stickId){ updateStick(x,y); }
+    else if(id===lookId){
+      yaw   -= (x-lastLX)*0.0045;
+      pitch -= (y-lastLY)*0.0045;
+      pitch = THREE.MathUtils.clamp(pitch, -1.2, 1.0);
+      lastLX=x; lastLY=y;
+    }
+  }
+}
+function onPointerUp(e){
+  for(const t of e.changedTouches ? e.changedTouches : [e]){
+    const id = t.identifier ?? 'mouse';
+    if(id===stickId){ stickId=null; move.x=0; move.y=0; nub.style.transform='translate(0,0)'; }
+    if(id===lookId){ lookId=null; }
+  }
+}
+function updateStick(x,y){
+  let dx=x-stickCX, dy=y-stickCY;
+  const max=52, len=Math.hypot(dx,dy);
+  if(len>max){ dx*=max/len; dy*=max/len; }
+  nub.style.transform=`translate(${dx}px,${dy}px)`;
+  move.x = dx/max; move.y = dy/max;
+}
+canvas.addEventListener('touchstart', e=>{e.preventDefault(); onPointerDown(e);}, {passive:false});
+canvas.addEventListener('touchmove',  e=>{e.preventDefault(); onPointerMove(e);}, {passive:false});
+canvas.addEventListener('touchend',   e=>{e.preventDefault(); onPointerUp(e);}, {passive:false});
+canvas.addEventListener('touchcancel',e=>{onPointerUp(e);}, {passive:false});
+stick.addEventListener('touchstart', e=>{e.preventDefault(); onPointerDown(e);}, {passive:false});
+stick.addEventListener('touchmove',  e=>{e.preventDefault(); onPointerMove(e);}, {passive:false});
+// desktop mouse
+canvas.addEventListener('mousedown', e=>{ lookId='mouse'; lastLX=e.clientX; lastLY=e.clientY; });
+window.addEventListener('mousemove', e=>{ if(lookId==='mouse'){ yaw-=(e.clientX-lastLX)*0.0035; pitch=THREE.MathUtils.clamp(pitch-(e.clientY-lastLY)*0.0035,-1.2,1.0); lastLX=e.clientX; lastLY=e.clientY; } });
+window.addEventListener('mouseup', ()=>{ if(lookId==='mouse') lookId=null; });
+window.addEventListener('keydown', e=>keys[e.code]=true);
+window.addEventListener('keyup',   e=>keys[e.code]=false);
+
+/* ============================================================
+   Generative eerie ambient music (Web Audio API).
+   A low drifting drone + breathing filter + sparse, echoing
+   high tones in a minor scale + soft wind noise.
+   ============================================================ */
+let actx=null, master=null, musicOn=true, droneNodes=[];
+function startAudio(){
+  if(actx) return;
+  actx = new (window.AudioContext||window.webkitAudioContext)();
+  master = actx.createGain();
+  master.gain.value = 0.0;
+  master.connect(actx.destination);
+  master.gain.linearRampToValueAtTime(0.32, actx.currentTime+4);
+
+  // shared echo for spaciousness
+  const delay=actx.createDelay(2.0); delay.delayTime.value=0.55;
+  const fb=actx.createGain(); fb.gain.value=0.45;
+  const echoWet=actx.createGain(); echoWet.gain.value=0.5;
+  delay.connect(fb); fb.connect(delay); delay.connect(echoWet); echoWet.connect(master);
+
+  // drone
+  const droneFilter=actx.createBiquadFilter();
+  droneFilter.type='lowpass'; droneFilter.frequency.value=420; droneFilter.Q.value=4;
+  droneFilter.connect(master);
+  const lfo=actx.createOscillator(); lfo.frequency.value=0.05;
+  const lfoGain=actx.createGain(); lfoGain.gain.value=240;
+  lfo.connect(lfoGain); lfoGain.connect(droneFilter.frequency); lfo.start();
+  [55, 82.41, 110, 164.81].forEach((f,i)=>{
+    const o=actx.createOscillator(); o.type = i%2 ? 'sine':'triangle';
+    o.frequency.value=f; o.detune.value=(Math.random()*10-5);
+    const g=actx.createGain(); g.gain.value=0.16/(i+1);
+    o.connect(g); g.connect(droneFilter);
+    // slow breathing
+    const blfo=actx.createOscillator(); blfo.frequency.value=0.03+Math.random()*0.04;
+    const bg=actx.createGain(); bg.gain.value=0.06;
+    blfo.connect(bg); bg.connect(g.gain); blfo.start();
+    o.start(); droneNodes.push(o,blfo);
+  });
+
+  // soft wind (filtered noise)
+  const noise=actx.createBufferSource();
+  const buf=actx.createBuffer(1, actx.sampleRate*3, actx.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  noise.buffer=buf; noise.loop=true;
+  const nf=actx.createBiquadFilter(); nf.type='bandpass'; nf.frequency.value=500; nf.Q.value=0.6;
+  const ng=actx.createGain(); ng.gain.value=0.05;
+  noise.connect(nf); nf.connect(ng); ng.connect(master);
+  const nlfo=actx.createOscillator(); nlfo.frequency.value=0.07;
+  const nlg=actx.createGain(); nlg.gain.value=0.035;
+  nlfo.connect(nlg); nlg.connect(ng.gain); nlfo.start(); noise.start();
+  droneNodes.push(noise);
+
+  // sparse eerie bell tones — A minor pentatonic-ish, high & lonely
+  const scale=[220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33];
+  function ping(){
+    if(actx && musicOn){
+      const f=scale[Math.floor(Math.random()*scale.length)] * (Math.random()<0.5?1:2);
+      const o=actx.createOscillator(); o.type='sine'; o.frequency.value=f;
+      const g=actx.createGain(); g.gain.value=0;
+      const t=actx.currentTime;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(0.12, t+0.04);
+      g.gain.exponentialRampToValueAtTime(0.0008, t+3.5);
+      o.connect(g); g.connect(master); g.connect(delay);
+      o.start(t); o.stop(t+3.8);
+    }
+    setTimeout(ping, 2500 + Math.random()*6000);
+  }
+  setTimeout(ping, 2000);
+}
+const soundBtn=document.getElementById('sound');
+soundBtn.addEventListener('click', ()=>{
+  musicOn=!musicOn;
+  if(master) master.gain.linearRampToValueAtTime(musicOn?0.32:0.0, actx.currentTime+0.6);
+  soundBtn.textContent = musicOn ? '♪' : '·';
+});
+
+/* ============================================================
+   Game loop
+   ============================================================ */
+let started=false;
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(), 0.05);
+  const t=clock.elapsedTime;
+
+  // movement (joystick + WASD)
+  let mx=move.x, mz=move.y;
+  if(keys['KeyW']||keys['ArrowUp']) mz-=1;
+  if(keys['KeyS']||keys['ArrowDown']) mz+=1;
+  if(keys['KeyA']||keys['ArrowLeft']) mx-=1;
+  if(keys['KeyD']||keys['ArrowRight']) mx+=1;
+  const len=Math.hypot(mx,mz);
+  if(len>1){ mx/=len; mz/=len; }
+  if(len>0.001){
+    const sin=Math.sin(yaw), cos=Math.cos(yaw);
+    // forward = -z in view space
+    const fx=-sin, fz=-cos;     // forward dir on ground
+    const rx= cos, rz=-sin;     // right dir on ground
+    player.x += (fx*(-mz) + rx*mx) * SPEED * dt;
+    player.z += (fz*(-mz) + rz*mx) * SPEED * dt;
+  }
+
+  updateTerrain(player.x, player.z);
+  updateGrass(player.x, player.z);
+
+  // camera follows ground with a gentle walking bob
+  const ground=terrainHeight(player.x, player.z);
+  const bob = (len>0.01) ? Math.sin(t*9)*0.06 : 0;
+  camera.position.set(player.x, ground+EYE+bob, player.z);
+  _e.set(pitch, yaw, 0, 'YXZ');
+  camera.quaternion.setFromEuler(_e);
+
+  // sky & clouds follow the player so they feel infinitely far
+  sky.position.copy(camera.position);
+  for(const c of clouds){
+    c.position.x += c.userData.drift*dt;
+    c.position.y += Math.sin(t*0.2 + c.userData.bob)*0.02;
+    // wrap clouds around player
+    const rel=c.position.x - camera.position.x;
+    if(rel>500) c.position.x -= 1000;
+    if(rel<-500) c.position.x += 1000;
+    const relz=c.position.z - camera.position.z;
+    if(relz>500) c.position.z -= 1000;
+    if(relz<-500) c.position.z += 1000;
+    c.lookAt(camera.position.x, c.position.y, camera.position.z);
+  }
+
+  renderer.render(scene, camera);
+}
+
+/* ---------- boot ---------- */
+function resize(){
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+window.addEventListener('resize', resize);
+
+// prime the world so first frame is ready
+updateTerrain(0,0); updateGrass(0,0);
+animate();
+
+const startEl=document.getElementById('start');
+const hud=document.getElementById('hud');
+const fade=document.getElementById('fade');
+document.getElementById('playBtn').addEventListener('click', ()=>{
+  if(started) return; started=true;
+  startAudio();
+  fade.style.opacity='1';
+  startEl.style.opacity='0';
+  setTimeout(()=>{ startEl.style.display='none'; fade.style.opacity='0'; hud.classList.add('on'); }, 700);
+});
+</script>
+</body>
+</html>
