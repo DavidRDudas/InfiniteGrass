@@ -108,7 +108,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;   // OutputPass applies this (linear -> display)
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.92;
 
 const scene = new THREE.Scene();
 const FOG_COLOR = new THREE.Color(0xc8e6f7);
@@ -325,7 +325,7 @@ const skyMat = new THREE.ShaderMaterial({
       float t=pow(clamp(d.y*1.1,0.0,1.0),0.6);
       vec3 col=mix(horizon, top, t);
       float sd=max(dot(d, normalize(sunDir)),0.0);
-      col += sunTint * (pow(sd,8.0)*0.18 + pow(sd,180.0)*0.7);
+      col += sunTint * (pow(sd,10.0)*0.10 + pow(sd,180.0)*0.7);
       col += vec3(1.0,0.92,0.74) * smoothstep(0.9994,0.99975,sd) * 4.0;     // sun disc -> bloom
       float md=max(dot(d, normalize(moonDir)),0.0);
       col += vec3(0.6,0.7,1.0) * pow(md,60.0) * 0.3 * nightF;
@@ -344,7 +344,7 @@ const nightTop=new THREE.Color(0x04060e), nightHor=new THREE.Color(0x0d1430);
 const sunDayTint=new THREE.Color(0xfff3d0), sunDuskTint=new THREE.Color(0xff7320);
 const hemiSkyDay=new THREE.Color(0xbfe1ff), hemiSkyNight=new THREE.Color(0x141a2e);
 const hemiGndDay=new THREE.Color(0x6b8f4a), hemiGndNight=new THREE.Color(0x0a1410);
-const cloudDusk=new THREE.Color(0xff9d6b), cloudNight=new THREE.Color(0x2a3242);
+const cloudDay=new THREE.Color(0xd7e3ee), cloudDusk=new THREE.Color(0xff9d6b), cloudNight=new THREE.Color(0x2a3242);
 const sunDirVec=new THREE.Vector3(), moonDirVec=new THREE.Vector3();
 const topC=new THREE.Color(), horC=new THREE.Color(), sunTintC=new THREE.Color(), cloudC=new THREE.Color();
 const CYCLE = 280;                 // seconds for a full day
@@ -377,13 +377,13 @@ function updateSky(t){
   moon.position.copy(moonDirVec).multiplyScalar(140);
   moon.intensity = 0.45*nightF;
 
-  scene.fog.color.copy(horC);
-  scene.fog.near = 18 + 12*dayF;
-  scene.fog.far  = 66 + 46*dayF;   // night closes in
+  scene.fog.color.copy(horC).multiplyScalar(0.92);  // a touch below the sky so the horizon isn't a bright wash
+  scene.fog.near = 22 + 14*dayF;
+  scene.fog.far  = 74 + 48*dayF;   // a little deeper by day; night still closes in
 
-  cloudC.copy(WHITE).lerp(cloudNight, nightF*0.8).lerp(cloudDusk, duskF*0.5);
+  cloudC.copy(cloudDay).lerp(cloudNight, nightF*0.8).lerp(cloudDusk, duskF*0.5);
   cloudMat.color.copy(cloudC);
-  cloudMat.opacity = 0.85 - 0.5*nightF;
+  cloudMat.opacity = 0.72 - 0.42*nightF;
   ffMat.opacity = 0.16 + 0.7*nightF;   // motes -> fireflies after dark
   ffMat.size    = 0.32 + 0.55*nightF;
 }
@@ -710,7 +710,8 @@ soundBtn.addEventListener('click', ()=>{
    ============================================================ */
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.65, 0.55, 0.70);
+// gentle bloom: only genuinely bright things (sun/moon discs, lit windows, fireflies) glow
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.88);
 composer.addPass(bloom);
 const GradeShader = {
   uniforms:{ tDiffuse:{value:null}, uTime:{value:0}, uVig:{value:1.15} },
