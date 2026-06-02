@@ -73,7 +73,7 @@
   <div id="start">
     <h1>Endless Hills</h1>
     <p>Rolling fields of freshly-cut grass beneath a wide, changing sky. Walk the lane between the fences as far as you like — through the long afternoon, the burning dusk, and the dark.</p>
-    <p class="warn">There's a house at the end of the lane. It never comes any closer… as long as you keep it in sight.</p>
+    <p class="warn">There's a house at the end of the lane. No matter how far you walk, it never comes any closer.</p>
     <button class="play" id="playBtn">Step Outside</button>
     <small>Headphones strongly recommended</small>
   </div>
@@ -553,11 +553,10 @@ const GATE_Z = 3.0;
 
 /* ============================================================
    The house at the end of the lane. Pinned due north of the
-   player, it stays frozen while you watch it — but the moment
-   you look away it creeps closer, and never retreats.
+   player, it always stays exactly the same distance ahead, so
+   no matter how far you walk it never comes any closer.
    ============================================================ */
-const HOUSE_DIST = 85, HOUSE_MIN = 14, HOUSE_CREEP = 9, GROUND_SINK = 5.0;
-let houseDist = HOUSE_DIST, houseRevealed = false;
+const HOUSE_DIST = 85, GROUND_SINK = 5.0;
 const house = new THREE.Group();
 const moundR = 16, moundTop = moundR*0.5;
 const mound = new THREE.Mesh(
@@ -582,14 +581,10 @@ for(const x of [-2.1, 2.1]){
   w.position.set(x, moundTop + 3.2, 3.01); house.add(w);
 }
 scene.add(house);
-function updateHouse(dt){
-  const watching = Math.cos(yaw) > 0.62;           // looking roughly down the lane, at the house
-  if(started && !watching) houseDist = Math.max(HOUSE_MIN, houseDist - HOUSE_CREEP*dt);
-  const hz = player.z - houseDist;
+function updateHouse(){
+  const hz = player.z - HOUSE_DIST;                // always the same distance ahead — never closer
   house.position.set(player.x, terrainHeight(player.x, hz) - GROUND_SINK, hz);
-  const closeF = 1 - THREE.MathUtils.clamp((houseDist-HOUSE_MIN)/(HOUSE_DIST-HOUSE_MIN), 0, 1);
-  winMat.emissiveIntensity = 0.5 + 2.2*skyNightF + 1.6*closeF;
-  if(started && watching && houseDist < 32 && !houseRevealed){ houseRevealed = true; stinger(); }
+  winMat.emissiveIntensity = 0.5 + 2.2*skyNightF;  // windows glow brighter after dark
 }
 
 /* ============================================================
@@ -703,16 +698,6 @@ function caw(){
   }
   setTimeout(caw, 9000 + Math.random()*16000);
 }
-function stinger(){
-  if(!actx) return;
-  const t=actx.currentTime;
-  [40, 41.7, 58].forEach(f=>{
-    const o=actx.createOscillator(); o.type='sawtooth'; o.frequency.value=f;
-    const lp=actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=300;
-    const g=actx.createGain(); g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.18, t+0.6); g.gain.exponentialRampToValueAtTime(0.001, t+4.0);
-    o.connect(lp); lp.connect(g); g.connect(master); o.start(t); o.stop(t+4.2);
-  });
-}
 const soundBtn=document.getElementById('sound');
 soundBtn.addEventListener('click', ()=>{
   musicOn=!musicOn;
@@ -779,7 +764,7 @@ function animate(){
   updateTerrain(player.x, player.z);
   updateGrass(player.x, player.z);
   updateFence(player.z);
-  updateHouse(dt);
+  updateHouse();
   updateFireflies(t);
   updateCrows(t);
 
@@ -810,7 +795,7 @@ function resize(){
 window.addEventListener('resize', resize);
 
 updateSky(0);
-updateTerrain(0,0); updateGrass(0,0); updateFence(0); updateHouse(0);
+updateTerrain(0,0); updateGrass(0,0); updateFence(0); updateHouse();
 animate();
 
 const startEl=document.getElementById('start');

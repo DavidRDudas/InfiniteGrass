@@ -32,9 +32,9 @@ headphones strongly recommended).
   the scene lighting.
 - **The walkable lane** — two parallel white picket fences (instanced and recycled, so they
   run to the horizon and ride the hills) with an open gate at the start.
-- **The unreachable house** — pinned due north of the player. While you keep it in view it
-  stays frozen and distant; the instant you look away it creeps closer, and never retreats —
-  until you turn back and find it looming. A low dread stinger marks the reveal.
+- **The unreachable house** — pinned due north of the player at a fixed distance, so no matter
+  how far you walk it never comes any closer; it just drifts along the horizon at the end of
+  the lane.
 - **Atmosphere & life** — drifting fireflies/pollen motes (glowing after dark), a distant
   circling flock of crows, footsteps, occasional caws, and generative eerie ambient music
   (drone, breathing filter, wind, sparse echoing tones).
